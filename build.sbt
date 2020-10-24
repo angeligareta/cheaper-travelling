@@ -14,6 +14,6 @@ libraryDependencies ++= Seq(
   "org.apache.spark" % "spark-streaming-kafka-0-8_2.11" % "2.2.1",
   ("com.datastax.spark" %% "spark-cassandra-connector" % "2.0.2").exclude("io.netty", "netty-handler"),
   // HTTP API
-  "org.scalaj" %% "scalaj-http" % "2.4.2",
+  "org.scalaj" %% "scalaj-http" % "2.4.2"
 )
 

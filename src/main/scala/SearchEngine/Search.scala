@@ -169,9 +169,9 @@ object Search {
     val skyScannerPlaces = getSkyScannerPlaces(city)
 
     // Second query airport stations returned by flixbus api
-    // TODO
+    val flixBusPlaces = getFlixBusPlaces(city)
 
-    skyScannerPlaces // ++ flixBusPlaces
+    skyScannerPlaces ++ flixBusPlaces// ++ flixBusPlaces
   }
 
   def getSkyScannerPlaces(city: City): Set[Place] = {
@@ -192,6 +192,32 @@ object Search {
           val placeId = place.getOrElse("PlaceId", "").toString
           val placeName = place.getOrElse("PlaceName", "").toString
           Place(placeId, placeName, TransportType.SkyScanner)
+        })
+        nearbyPlaces.toSet
+      case None =>
+        println(s"Parsing failed - Request ${request} - Response: ${rawResponse}")
+        Set()
+      case other =>
+        println("Unknown data structure: " + other)
+        Set()
+    }
+  }
+
+  def getFlixBusPlaces(city: City): Set[Place] = {
+
+    val url = s"https://1.flixbus.transport.rest/regions/?query=${city.name.replace(" ", "%20")}"
+    val request = Process("curl", Seq("--request", "GET", "--url", url))
+    val rawResponse = request.!!(ProcessLogger(_ => null))
+    val response = JSON.parseFull(rawResponse)
+    println(response)
+
+    response match {
+      // Matches if jsonStr is valid JSON and represents a Map of Strings to Any
+      case Some(nearbyPlacesQueryRaw: List[Map[String, Any]]) =>
+        val nearbyPlaces = nearbyPlacesQueryRaw.map(place => {
+          val placeId = place.getOrElse("id", "").toString
+          val placeName = place.getOrElse("name", "").toString
+          Place(placeId, placeName, TransportType.FlixBus)
         })
         nearbyPlaces.toSet
       case None =>
@@ -258,6 +284,60 @@ object Search {
         println("Unknown data structure: " + other)
         List()
     }
+  }
+
+  def getFlixBusRoutes(srcPlace: Place, dstPlace: Place, departureDate: String, returnDate: String): List[RouteGraphEdge] = {
+    val url = s"https://1.flixbus.transport.rest/journeys/?origin=${srcPlace.id}&destination=${dstPlace.id}&date=${departureDate}"
+    val request = Process("curl", Seq("--request", "GET", "--url", url))
+    val rawResponse = request.!!(ProcessLogger(_ => null))
+    val response = JSON.parseFull(rawResponse)
+
+    response match {
+      // Matches if jsonStr is valid JSON and represents a Map of Strings to Any
+      case Some(routeQueryResponseRaw: List[Map[String, Any]]) =>
+        val routePlaces = routeQueryResponseRaw.map( routePlace => {
+          //Get variables
+          val departureDateTime = routePlace("departure").asInstanceOf[String]
+          val arrivalDateTime = routePlace("arrival").asInstanceOf[String]
+          val priceMap = routePlace("price").asInstanceOf[Map[String,Any]]
+          val price = priceMap("amount").asInstanceOf[Double]
+          (departureDateTime, arrivalDateTime, price, journeyDuration(departureDateTime, arrivalDateTime)) //trip
+        })
+
+        routePlaces.map(trip =>
+          RouteGraphEdge(srcPlace, dstPlace, Array(), TransportType.FlixBus, trip._3, trip._4, trip._1, returnDate)
+        )
+
+
+      case None =>
+        println(s"Parsing failed - Request ${request} - Response: ${rawResponse}")
+        List()
+      case other =>
+        println("Unknown data structure: " + other)
+        List()
+    }
+  }
+
+  // splits the date string in day, time, and some offset (i guess)
+  def parseDateTime(dateTime: String) : Array[String] = {
+
+    dateTime.split(Array('T', '.'))
+
+  }
+
+  //calculates the journey duration in minutes
+  //assumption: one transit trip is less than 24 hours, otherwise the code needs to be adjusted
+  def journeyDuration(departureDateTime: String, arrivalDateTime:String) : Int = {
+    val parsedDepartureDate = parseDateTime(departureDateTime) //the incoming string is split into day, time and some offset
+    val parsedArrivalDate = parseDateTime(arrivalDateTime)
+    val parsedDepartureTime = parsedDepartureDate(1).split(':') //splits the time in hours, minutes and seconds
+    val parsedArrivalTime = parsedArrivalDate(1).split(':')
+
+    val hours = if (parsedDepartureTime(0).toInt > parsedArrivalTime(0).toInt) parsedArrivalTime(0).toInt + 24 - parsedDepartureTime(0).toInt else parsedArrivalTime(0).toInt - parsedDepartureTime(0).toInt
+
+    hours * 60 + parsedArrivalTime(1).toInt - parsedDepartureTime(1).toInt
+
+
   }
 
   /**
