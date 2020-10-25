@@ -26,6 +26,8 @@ object Search {
   val maxTransitsFlight = 3
   val maxTransitsMixed = 5
 
+  val skyScannerKeys: Array[String] = Array("7863185a61msh6de35a511c1c796p1f805djsn956c714b6324", "c1d6dfff64msh11b436d0b19f66cp1aa76bjsn9a8b00717a2e", "023f9d23b4msh7473f3840e44c05p19f165jsn5dcc120f3285", "4cdbce5e3cmsh89111bd2e4e842fp193f46jsnf95a75c11f60", "16f98fa46emshb2cecc0f4e4d02cp13f5bajsn7fad3fee738f")
+  var keyIndex = 0
 
   def main(args: Array[String]): Unit = {
     //    if (args.length != 1) {
@@ -78,7 +80,7 @@ object Search {
         val src = travelQueryInput("src").asInstanceOf[String]
         val dst = travelQueryInput("dst").asInstanceOf[String]
         val departureDate = travelQueryInput("departureDate").asInstanceOf[String]
-        val returnDate = travelQueryInput("returnDate").asInstanceOf[String]
+        //val returnDate = travelQueryInput("returnDate").asInstanceOf[String]
 
         // Get nearby cities from src and destination [So they can be used as transit stops to make the trip cheaper]
         val srcCities: Set[City] = getCities(src)
@@ -96,11 +98,22 @@ object Search {
         val destinationCity: City = dstCities.find(!_.isTransit).orNull
         val transitCities: Set[City] = srcCities.filter(_.isTransit) ++ dstCities.filter(_.isTransit)
 
+        println(s"Origin city: ${originCity}")
+        println(s"Dst city: ${destinationCity}")
+        println(s"Transity cities: ${transitCities}")
+
         if (originCity != null && destinationCity != null) {
           // Create graph. In its constructor it will use transport APIs to create the edges between the city nodes.
-          val route = new RouteGraph(originCity, destinationCity, transitCities, departureDate, returnDate)
+          val route = new RouteGraph(originCity, destinationCity, transitCities, departureDate)
           route.createGraph()
-          println(route.edges.mkString("Array(", ", ", ")"))
+
+          println("***Graph***")
+          println("**Edges**")
+          route.edges.foreach(edge => {
+            println(s"(${edge.origin.id}:${edge.origin.name}:${edge.origin.transportType}:${edge.origin.cityName}) ==(${edge.price}:${edge.totalTime})=> (${edge.destination.id}:${edge.destination.name}:${edge.destination.transportType}:${edge.destination.cityName})")
+          })
+          println("**Nodes**")
+          route.nodes.foreach(println)
 
           Some(route)
         }
@@ -141,8 +154,8 @@ object Search {
 
         // Get information from cities from GeoDB and fill with places retrieved from transport APIs [Sorted by distance]
         val nearbyCities = nearbyCitiesRaw.zipWithIndex.map { case (city, index) =>
-          val cityName = city.getOrElse("city", "").toString
-          val cityCountryCode = city.getOrElse("countryCode", "").toString
+          val cityName = city("city").asInstanceOf[String]
+          val cityCountryCode = city("countryCode").asInstanceOf[String]
           // val cityDistance = city.getOrElse("distance", Double.MaxValue).asInstanceOf[Double]
 
           val newCity = City(cityName, cityCountryCode, index != 0, Set()) // isTransit = cityDistance > smallestDistance + thresholdDistance
@@ -171,7 +184,7 @@ object Search {
     // Second query airport stations returned by flixbus api
     val flixBusPlaces = getFlixBusPlaces(city)
 
-    skyScannerPlaces ++ flixBusPlaces// ++ flixBusPlaces
+    skyScannerPlaces ++ flixBusPlaces // ++ flixBusPlaces
   }
 
   def getSkyScannerPlaces(city: City): Set[Place] = {
@@ -179,8 +192,9 @@ object Search {
      * Note: Had to execute curl process because of error:
      * "An error in one of the rendering components of OpenRasta prevents the error message from being sent back."
      */
+    keyIndex += 1
     val url = s"https://rapidapi.p.rapidapi.com/apiservices/autosuggest/v1.0/${city.countryCode}/EUR/en-GB/?query=${city.name.replace(" ", "%20")}"
-    val request = Process("curl", Seq("--request", "GET", "--url", url, "--header", "x-rapidapi-host:skyscanner-skyscanner-flight-search-v1.p.rapidapi.com", "--header", "x-rapidapi-key:c1d6dfff64msh11b436d0b19f66cp1aa76bjsn9a8b00717a2e"))
+    val request = Process("curl", Seq("--request", "GET", "--url", url, "--header", "x-rapidapi-host:skyscanner-skyscanner-flight-search-v1.p.rapidapi.com", "--header", s"x-rapidapi-key:${skyScannerKeys(keyIndex % skyScannerKeys.length)}"))
     val rawResponse = request.!!(ProcessLogger(_ => null))
     val response = JSON.parseFull(rawResponse)
 
@@ -188,12 +202,15 @@ object Search {
       // Matches if jsonStr is valid JSON and represents a Map of Strings to Any
       case Some(nearbyPlacesQueryRaw: Map[String, List[Map[String, Any]]]) =>
         val nearbyPlacesRaw = nearbyPlacesQueryRaw.getOrElse("Places", List())
+
         val nearbyPlaces = nearbyPlacesRaw.map(place => {
-          val placeId = place.getOrElse("PlaceId", "").toString
-          val placeName = place.getOrElse("PlaceName", "").toString
-          Place(placeId, placeName, TransportType.SkyScanner)
+          val placeId = place("PlaceId").asInstanceOf[String]
+          val placeName = place("PlaceName").asInstanceOf[String]
+          Place(placeId, placeName, TransportType.SkyScanner, city.name)
         })
-        nearbyPlaces.toSet
+
+        // Remove generic groups [As there would be duplicates] These are the ones with format: XXXX-sky
+        nearbyPlaces.filter(nearbyPlace => nearbyPlace.id.split("-")(0).length != 4).toSet
       case None =>
         println(s"Parsing failed - Request ${request} - Response: ${rawResponse}")
         Set()
@@ -204,20 +221,20 @@ object Search {
   }
 
   def getFlixBusPlaces(city: City): Set[Place] = {
-
+    // TODO: Change to normal request
     val url = s"https://1.flixbus.transport.rest/regions/?query=${city.name.replace(" ", "%20")}"
     val request = Process("curl", Seq("--request", "GET", "--url", url))
     val rawResponse = request.!!(ProcessLogger(_ => null))
     val response = JSON.parseFull(rawResponse)
-    println(response)
 
     response match {
       // Matches if jsonStr is valid JSON and represents a Map of Strings to Any
+      // Format: List(Map(weight -> 1.0, name -> Stockholm, score -> 4.000819896, id -> 3798, relevance -> 4.000819896, type -> region))
       case Some(nearbyPlacesQueryRaw: List[Map[String, Any]]) =>
         val nearbyPlaces = nearbyPlacesQueryRaw.map(place => {
-          val placeId = place.getOrElse("id", "").toString
-          val placeName = place.getOrElse("name", "").toString
-          Place(placeId, placeName, TransportType.FlixBus)
+          val placeId = place("id").asInstanceOf[String]
+          val placeName = place("name").asInstanceOf[String]
+          Place(placeId, placeName, TransportType.FlixBus, city.name)
         })
         nearbyPlaces.toSet
       case None =>
@@ -229,20 +246,21 @@ object Search {
     }
   }
 
-  def getRoutes(srcCity: City, destCity: City, departureDate: String, returnDate: String): List[RouteGraphEdge] = {
+  def getRoutes(srcCity: City, dstCity: City, departureDate: String): List[RouteGraphEdge] = {
     var totalRoutes: List[RouteGraphEdge] = List()
-
-    println(srcCity)
-    println(destCity)
 
     // For each pair of places
     srcCity.places.flatMap(srcPlace => {
-      destCity.places.map(dstPlace => {
+      dstCity.places.map(dstPlace => {
         // If places are of the same type
         if (srcPlace.transportType == dstPlace.transportType) {
           if (srcPlace.transportType == TransportType.SkyScanner) {
-            val routes = getSkyScannerRoutes(srcPlace, dstPlace, departureDate, returnDate)
-            totalRoutes = totalRoutes ++ routes
+            totalRoutes = totalRoutes ++
+              getSkyScannerRoutes(srcPlace, dstPlace, departureDate, srcCity, dstCity)
+          }
+          else if (srcPlace.transportType == TransportType.FlixBus){
+            totalRoutes = totalRoutes ++
+              getFlixBusRoutes(srcPlace, dstPlace, departureDate, srcCity, dstCity)
           }
         }
       })
@@ -251,32 +269,71 @@ object Search {
     totalRoutes
   }
 
-  def getSkyScannerRoutes(srcPlace: Place, dstPlace: Place, departureDate: String, returnDate: String): List[RouteGraphEdge] = {
-    val url = s"https://rapidapi.p.rapidapi.com/apiservices/browseroutes/v1.0/US/EUR/en-US/${srcPlace.id}/${dstPlace.id}/${departureDate}?inboundpartialdate=${returnDate}"
-    val request = Process("curl", Seq("--request", "GET", "--url", url, "--header", "x-rapidapi-host:skyscanner-skyscanner-flight-search-v1.p.rapidapi.com", "--header", "x-rapidapi-key:c1d6dfff64msh11b436d0b19f66cp1aa76bjsn9a8b00717a2e"))
+  /**
+   * Returns place name that has the id origin Id in route places skyscanner journey response
+   * Format: List(Map(Name -> Stockholm Bromma, CityName -> Stockholm, CountryName -> Sweden, CityId -> STOC, PlaceId -> 42881.0, SkyscannerCode -> BMA, IataCode -> BMA, Type -> Station)
+   * @param placeId
+   * @param routePlaces
+   * @return
+   */
+  def getSkyScannerPlaceName(placeId: String, routePlaces: List[Map[String, Any]]): String = {
+    val routePlace = routePlaces.find(routePlace => {
+      val id = routePlace("PlaceId").asInstanceOf[Double].toString
+      id == placeId
+    })
+
+    routePlace.get("Name").asInstanceOf[String]
+  }
+
+  def getSkyScannerRoutes(srcPlace: Place, dstPlace: Place, departureDate: String, srcCity: City, dstCity: City): List[RouteGraphEdge] = {
+    keyIndex += 1
+    val url = s"https://rapidapi.p.rapidapi.com/apiservices/browseroutes/v1.0/${srcCity.countryCode}/EUR/en-US/${srcPlace.id}/${dstPlace.id}/${departureDate}"
+    val request = Process("curl", Seq("--request", "GET", "--url", url, "--header", "x-rapidapi-host:skyscanner-skyscanner-flight-search-v1.p.rapidapi.com", "--header", s"x-rapidapi-key:${skyScannerKeys(keyIndex % skyScannerKeys.length)}"))
     val rawResponse = request.!!(ProcessLogger(_ => null))
     val response = JSON.parseFull(rawResponse)
+
+//    println(srcPlace)
+//    println(dstPlace)
+//    println(response)
 
     response match {
       // Matches if jsonStr is valid JSON and represents a Map of Strings to Any
       case Some(routeQueryResponseRaw: Map[String, List[Map[String, Any]]]) =>
-        val routePlaces = routeQueryResponseRaw("Places").asInstanceOf[List[Map[String, Any]]]
-        val routeQuotes = routeQueryResponseRaw("Quotes").asInstanceOf[List[Map[String, Any]]]
+        // Free plan
+        if (routeQueryResponseRaw.contains("message")) {
+          println("Omitting due to rate limit...")
+          List()
+        }
+        else {
+          val routePlaces = routeQueryResponseRaw("Places").asInstanceOf[List[Map[String, Any]]]
+          val routeQuotes = routeQueryResponseRaw("Quotes").asInstanceOf[List[Map[String, Any]]]
 
-        // Filter quotes with correct dates (Skyscanner returns alternative days)
-        val filteredRouteQuotes = routeQuotes.filter(routeQuote => {
-          val outboundLeg = routeQuote("OutboundLeg").asInstanceOf[Map[String, Any]]
-          val departureDateRoute = outboundLeg("DepartureDate").asInstanceOf[String]
+          // Filter quotes with correct dates (Skyscanner returns alternative days)
+          // Format: Quotes -> List(Map(OutboundLeg -> Map(CarrierIds -> List(1090.0), OriginId -> 89268.0, DestinationId -> 56332.0, DepartureDate -> 2020-12-04T00:00:00), QuoteId -> 1.0, Direct -> false, MinPrice -> 118.0, QuoteDateTime -> 2020-10-21T10:15:00))
+          val filteredRouteQuotes = routeQuotes.filter(routeQuote => {
+            val outboundLeg = routeQuote("OutboundLeg").asInstanceOf[Map[String, Any]]
+            val departureDateRoute = outboundLeg("DepartureDate").asInstanceOf[String]
+            // Save if departure date of the route is the same date as target
+            departureDateRoute.startsWith(departureDate)
+          })
 
-          // Save if departure date of the route is the same date as target
-          departureDateRoute.startsWith(departureDate)
-        })
+          // Map the route quotes to RouteGraphEdge
+          filteredRouteQuotes.map(routeQuote => {
+            println(s"Skyscanner route: ${routeQuote}")
+            val outboundLegMap = routeQuote("OutboundLeg").asInstanceOf[Map[String, Any]]
+            val originId = outboundLegMap("OriginId").asInstanceOf[Double].toString
+            val destinationId = outboundLegMap("DestinationId").asInstanceOf[Double].toString
 
-        //
-        filteredRouteQuotes.map(routeQuote => {
-          // TODO: See if the place is different and create a place otherwise
-          RouteGraphEdge(srcPlace, dstPlace, Array(), TransportType.SkyScanner, 1, 1, departureDate, returnDate)
-        })
+            val isDirect = routeQuote("Direct").asInstanceOf[Boolean]
+            val minPrice = routeQuote("MinPrice").asInstanceOf[Double]
+
+            // Create new place from origin and destination for indetifiend unique skyscanner airports
+            val newSrcPlace = Place(originId, getSkyScannerPlaceName(originId, routePlaces), TransportType.SkyScanner, srcCity.name)
+            val newDstPlace = Place(destinationId, getSkyScannerPlaceName(destinationId, routePlaces), TransportType.SkyScanner, dstCity.name)
+
+            RouteGraphEdge(newSrcPlace, newDstPlace, isDirect, TransportType.SkyScanner, minPrice, 0, departureDate, departureDate)
+          })
+        }
       case None =>
         println(s"Parsing failed - Request ${request} - Response: ${rawResponse}")
         List()
@@ -286,29 +343,42 @@ object Search {
     }
   }
 
-  def getFlixBusRoutes(srcPlace: Place, dstPlace: Place, departureDate: String, returnDate: String): List[RouteGraphEdge] = {
+  def getFlixBusRoutes(srcPlace: Place, dstPlace: Place, departureDate: String, srcCity: City, dstCity: City): List[RouteGraphEdge] = {
+    // TODO: Change to normal API
     val url = s"https://1.flixbus.transport.rest/journeys/?origin=${srcPlace.id}&destination=${dstPlace.id}&date=${departureDate}"
     val request = Process("curl", Seq("--request", "GET", "--url", url))
     val rawResponse = request.!!(ProcessLogger(_ => null))
     val response = JSON.parseFull(rawResponse)
 
+//    println(srcPlace)
+//    println(dstPlace)
+
     response match {
       // Matches if jsonStr is valid JSON and represents a Map of Strings to Any
       case Some(routeQueryResponseRaw: List[Map[String, Any]]) =>
-        val routePlaces = routeQueryResponseRaw.map( routePlace => {
-          //Get variables
-          val departureDateTime = routePlace("departure").asInstanceOf[String]
-          val arrivalDateTime = routePlace("arrival").asInstanceOf[String]
-          val priceMap = routePlace("price").asInstanceOf[Map[String,Any]]
+//        println(routeQueryResponseRaw)
+        val routePlaces: List[RouteGraphEdge] = routeQueryResponseRaw.map(routeQuote => {
+          println(s"Flixbus route: ${routeQuote}")
+          // Get variables
+          val origin = routeQuote("origin").asInstanceOf[Map[String, Any]] // Format: Map(type -> station, id -> 13628, name -> Arlanda Airport T5, importance -> 100.0) // destination -> Map(type -> station, id -> 13828, name -> Uppsala, importance -> null)
+          val destination = routeQuote("destination").asInstanceOf[Map[String, Any]] //  Format: Map(type -> station, id -> 28998, name -> Uppsala Business Park, importance -> null)
+          val departureDateTime = routeQuote("departure").asInstanceOf[String] // Departure time format: 2020-12-08T12:45:00.000Z
+          val arrivalDateTime = routeQuote("arrival").asInstanceOf[String]
+          val isDirect = routeQuote("direct").asInstanceOf[Boolean]
+          val priceMap = routeQuote("price").asInstanceOf[Map[String, Any]]
           val price = priceMap("amount").asInstanceOf[Double]
-          (departureDateTime, arrivalDateTime, price, journeyDuration(departureDateTime, arrivalDateTime)) //trip
+
+          val totalTime = journeyDuration(departureDateTime, arrivalDateTime)
+
+          // Create new place from origin and destination to represent unique flixbus stations
+          val newSrcPlace = Place(origin("id").asInstanceOf[String], origin("name").asInstanceOf[String], TransportType.FlixBus, srcCity.name)
+          val newDstPlace = Place(destination("id").asInstanceOf[String], destination("name").asInstanceOf[String], TransportType.FlixBus, dstCity.name)
+
+          // TODO: Check if there are available slots ? available -> Map(seats -> 999.0, slots -> 999.0)
+          // TODO: Add note in graph edge like "2 places left"
+          RouteGraphEdge(newSrcPlace, newDstPlace, isDirect, TransportType.FlixBus, price, totalTime, departureDateTime, arrivalDateTime)
         })
-
-        routePlaces.map(trip =>
-          RouteGraphEdge(srcPlace, dstPlace, Array(), TransportType.FlixBus, trip._3, trip._4, trip._1, returnDate)
-        )
-
-
+        routePlaces
       case None =>
         println(s"Parsing failed - Request ${request} - Response: ${rawResponse}")
         List()
@@ -318,16 +388,11 @@ object Search {
     }
   }
 
-  // splits the date string in day, time, and some offset (i guess)
-  def parseDateTime(dateTime: String) : Array[String] = {
-
-    dateTime.split(Array('T', '.'))
-
-  }
-
-  //calculates the journey duration in minutes
-  //assumption: one transit trip is less than 24 hours, otherwise the code needs to be adjusted
-  def journeyDuration(departureDateTime: String, arrivalDateTime:String) : Int = {
+  /**
+   * Calculates the journey duration in minutes
+   * Assumption: one transit trip is less than 24 hours, otherwise the code needs to be adjusted
+    */
+  def journeyDuration(departureDateTime: String, arrivalDateTime: String): Int = {
     val parsedDepartureDate = parseDateTime(departureDateTime) //the incoming string is split into day, time and some offset
     val parsedArrivalDate = parseDateTime(arrivalDateTime)
     val parsedDepartureTime = parsedDepartureDate(1).split(':') //splits the time in hours, minutes and seconds
@@ -336,8 +401,13 @@ object Search {
     val hours = if (parsedDepartureTime(0).toInt > parsedArrivalTime(0).toInt) parsedArrivalTime(0).toInt + 24 - parsedDepartureTime(0).toInt else parsedArrivalTime(0).toInt - parsedDepartureTime(0).toInt
 
     hours * 60 + parsedArrivalTime(1).toInt - parsedDepartureTime(1).toInt
+  }
 
-
+  /**
+   * Splits the date string in day, time, and offset
+    */
+  def parseDateTime(dateTime: String): Array[String] = {
+    dateTime.split(Array('T', '.'))
   }
 
   /**
@@ -348,10 +418,8 @@ object Search {
    * @param isTransit   The distance of the city from the coordinates is lower than the first found + threshold.
    */
   case class City(name: String, countryCode: String, isTransit: Boolean, var places: Set[Place]) {
-    def canEqual(a: Any): Boolean = a.isInstanceOf[City]
-
     override def equals(that: Any): Boolean = that match {
-      case that: Place => that.canEqual(this) && this.hashCode == that.hashCode
+      case that: City => this.name == that.name
       case _ => false
     }
 
@@ -365,13 +433,11 @@ object Search {
    * @param name          Name of the city provided by the transport API.
    * @param transportType API used to obtained the place
    */
-  case class Place(id: String, name: String, transportType: TransportType) {
+  case class Place(id: String, name: String, transportType: TransportType, cityName: String) {
     override def equals(that: Any): Boolean = that match {
-      case that: Place => that.canEqual(this) && this.hashCode == that.hashCode
+      case that: Place => this.id == that.id
       case _ => false
     }
-
-    def canEqual(a: Any): Boolean = a.isInstanceOf[Place]
 
     override def hashCode(): Int = id.hashCode
   }
@@ -383,9 +449,9 @@ object Search {
    * @param destination Destination Place
    * @param stops       Possible stops
    */
-  class RouteGraph(origin: City, destination: City, stops: Set[City], departureDate: String, returnDate: String) {
+  class RouteGraph(origin: City, destination: City, stops: Set[City], departureDate: String) {
     var edges: Array[RouteGraphEdge] = Array()
-    var nodes: Array[City] = Array()
+    var nodes: Set[City] = Set()
 
     def createGraph(): Unit = {
       println("Initializing edges of route graph")
@@ -400,27 +466,42 @@ object Search {
      */
     private def initializeEdges(): Unit = {
       // Get possible edges between origin and destination
-      val directEdges = getRoutes(origin, destination, departureDate, returnDate)
+      val directEdges = getRoutes(origin, destination, departureDate)
 
       // For each stop, get possible edges adding that stop between origin and destination
-      val indirectEdgesFromOrigin = stops.flatMap(stop => getRoutes(origin, stop, departureDate, returnDate))
-      val indirectEdgesToDestination = stops.flatMap(stop => getRoutes(stop, destination, departureDate, returnDate))
+      val indirectEdgesFromOrigin = stops.flatMap(stop => getRoutes(origin, stop, departureDate))
+      val indirectEdgesToDestination = stops.flatMap(stop => getRoutes(stop, destination, departureDate))
 
       edges = edges ++ directEdges ++ indirectEdgesFromOrigin ++ indirectEdgesToDestination
+
+      // TODO: Filter edges by total price and duration
     }
 
     /**
      * Create new nodes from the edges
      */
     private def initializeNodes(): Unit = {
-      // First add known nodes
-      nodes = nodes :+ origin
-      nodes = nodes :+ destination
-      nodes = nodes ++ stops
+      // Create city groups
+      edges.foreach(edge => {
+        nodes += City(edge.origin.cityName, "", edge.origin.cityName == origin.name, Set())
+        nodes += City(edge.destination.cityName, "", edge.destination.cityName == destination.name, Set())
+      })
 
-      // For each edge if there is a stop unknown add it as new node
-      //      edges.foreach(edge => {
-      //      })
+      // Fill nodes places
+      edges.foreach(edge => {
+        nodes = nodes.map(node => {
+          var newNode = node
+          // Add origin
+          if (node.name == edge.origin.cityName) {
+            newNode.places = newNode.places + edge.origin
+          }
+          // Add destination
+          if (node.name == edge.destination.cityName) {
+            newNode.places = newNode.places + edge.destination
+          }
+          newNode
+        })
+      })
     }
   }
 
@@ -429,19 +510,20 @@ object Search {
    *
    * @param origin
    * @param destination
-   * @param stops
+   * @param isDirect
    * @param transportType
    * @param price
    * @param totalTime
    */
   case class RouteGraphEdge(origin: Place,
-                             destination: Place,
-                             stops: Array[Place],
-                             transportType: TransportType,
-                             price: Double,
-                             totalTime: Double,
-                             departureDateTime: String,
-                             returnDateTime: String)
+                            destination: Place,
+                            //stops: Array[Place],
+                            isDirect: Boolean,
+                            transportType: TransportType,
+                            price: Double,
+                            totalTime: Double,
+                            departureDateTime: String,
+                            arrivalDateTime: String)
 
   /**
    * Enumeration indicating the transport APIs used.
