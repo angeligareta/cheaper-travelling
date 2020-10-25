@@ -50,8 +50,8 @@ object SearchEngine {
     println("\tEnter time duration range in hours in the format: min,max. Example: 2,5")
     val timeTravelRange = readLine()
 
-    val tripRaw = s"""{"userId": ${userId}, "src": "${src}","departureDate":"${departureDate}","dst":"${dst}", "priceRange": ${priceRange.split(",").mkString("[", ",", "]")},"timeTravelRange": ${timeTravelRange.split(",").mkString("[", ",", "]")}}"""
-    //    val tripRaw = """{"userId":123,"src":"+59.3493243,+18.0707407","departureDate":"2020-10-29","dst":"+55.6761,+12.5683", "priceRange":[100,200],"timeTravelRange":[2,5]}""".stripMargin
+    val tripRaw = s"""{"src": "${src}","departureDate":"${departureDate}","dst":"${dst}", "priceRange": ${priceRange.split(",").mkString("[", ",", "]")},"timeTravelRange": ${timeTravelRange.split(",").mkString("[", ",", "]")}}"""
+    //    val tripRaw = """{"src":"+59.3493243,+18.0707407","departureDate":"2020-10-29","dst":"+55.6761,+12.5683", "priceRange":[100,200],"timeTravelRange":[2,5]}""".stripMargin
 
     // Send data to Kafka
     val data = new ProducerRecord[String, String](topicName, s"input-${userId}", tripRaw)
