@@ -25,14 +25,24 @@ object SearchEngine {
     Logger.getLogger("org").setLevel(Level.OFF)
     Logger.getLogger("akka").setLevel(Level.OFF)
 
-    // Initialize [Kafka Consumer Configuration](http://kafka.apache.org/documentation.html#consumerconfigs)
+    // Initialize kafka Producer
     val kafkaProducerParams = new Properties()
     kafkaProducerParams.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092")
     kafkaProducerParams.put(ProducerConfig.CLIENT_ID_CONFIG, "Generator")
     kafkaProducerParams.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.StringSerializer")
     kafkaProducerParams.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.StringSerializer")
 
+    // Initialize Kafka Consumer
+    val kafkaConsumerParams = Map[String, String](
+      ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG -> "localhost:9092"
+    )
+
+    // Initialize StreamingContext object => Main entry point for Spark Streaming functionality.
+    val sparkConf = new SparkConf().setMaster("local[*]").setAppName("CheaperTravelling_SearchEngine")
+    val ssc = new StreamingContext(sparkConf, Seconds(2))
+
     val producer = new KafkaProducer[String, String](kafkaProducerParams)
+    val consumer = KafkaUtils.createDirectStream[String, String, StringDecoder, StringDecoder](ssc, kafkaConsumerParams, Set(topicName))
 
     /**
      * Collect data
@@ -45,9 +55,9 @@ object SearchEngine {
     val dst = readLine()
     println("\tEnter desired departure date in the format: yyyy-mm-dd. Example: 2020-10-29")
     val departureDate = readLine()
-    println("\tEnter price range in the format: min,max. Example: 100,200")
+    println("\tEnter price range in the format: min,max. Example: 20,150")
     val priceRange = readLine()
-    println("\tEnter time duration range in hours in the format: min,max. Example: 2,5")
+    println("\tEnter time duration range in hours in the format: min,max. Example: 0,24")
     val timeTravelRange = readLine()
 
     val tripRaw = s"""{"src": "${src}","departureDate":"${departureDate}","dst":"${dst}", "priceRange": ${priceRange.split(",").mkString("[", ",", "]")},"timeTravelRange": ${timeTravelRange.split(",").mkString("[", ",", "]")}}"""
@@ -61,22 +71,8 @@ object SearchEngine {
     // Wait until error occurs or user stops the program and close Cassandra session
     producer.close()
 
-    /**
-     * Spark Streaming
-     */
-    val kafkaConsumerParams = Map[String, String](
-      ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG -> "localhost:9092"
-    )
-
-    // Initialize StreamingContext object => Main entry point for Spark Streaming functionality.
-    val sparkConf = new SparkConf().setMaster("local[*]").setAppName("CheaperTravelling_SearchEngine")
-    val ssc = new StreamingContext(sparkConf, Seconds(2))
-    //    ssc.checkpoint("tmp-search-engine")
-
-    val topicStream = KafkaUtils.createDirectStream[String, String, StringDecoder, StringDecoder](ssc, kafkaConsumerParams, Set(topicName))
-
     // Listen to incoming events of input travel topic
-    topicStream.foreachRDD(record => {
+    consumer.foreachRDD(record => {
       record.collect().foreach(inputRow => {
         if (inputRow._1 == s"output-${userId}") {
           println(s"Kafka result for user ${userId} query")
