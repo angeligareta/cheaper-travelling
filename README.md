@@ -58,15 +58,15 @@ the user [userid]. To achieve this, the following steps were performed:
 ## Results
 The first image shows how the user can insert the data required to perform the query. The query is
 then encoded as a JSON and sent to the Kafka topic with the keyinput-[userid].
-![TODO](TODO)
+![priceDuration](res/priceDuration.jpg)
   
 The following screenshot presents a partial log of how the back-end processes the query.
-![TODO](TODO)
+![query](res/query.jpg)
 
 Lastly, the final output of the application is presented, which shows the top 5 routes according to the
 price. Unfortunately, it was not possible to perform such optimization with a precise time, because
 SkyScanner API was not providing correct data regarding the flight duration.
-![TODO](TODO)
+![result](res/result.jpg)
 
 ## How to run code
 As Kafka uses ZooKeeper to maintain the configuration information, the ZooKeeper server needs to
